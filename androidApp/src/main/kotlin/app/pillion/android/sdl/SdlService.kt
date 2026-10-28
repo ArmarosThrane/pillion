@@ -238,9 +238,10 @@ class SdlService : Service() {
     }
 
     // ---- Wi-Fi auto-connect (v4.0.4) -------------------------------------------------------------
-    // Joining the bike's Wi-Fi hotspot should behave exactly like a USB attach: no IP typing, no
-    // Start re-tap. The hotspot's gateway is the bike (DHCP server + SDL host on the same box), so
-    // discovery is: probe gateway:12345, and as fallback sweep the phone's /24 once per network.
+    // Joining the bike's Wi-Fi hotspot should behave like a USB attach — no Start re-tap — but only
+    // for users who OPT IN via the persisted tcp_host tri-state: blank = USB-only (no scan at all),
+    // a literal IP/hostname = connect DIRECT to that host, "auto" = gateway-first probe + one /24
+    // sweep per network (the hotspot's gateway is the bike: DHCP server + SDL host on the same box).
 
     private var wifiCallback: ConnectivityManager.NetworkCallback? = null
     private var scannedSubnet: String? = null // one bounded subnet sweep per joined network
@@ -283,6 +284,41 @@ class SdlService : Service() {
         // A live USB session outranks Wi-Fi (Motorize-like); the USB toggle policy already handled
         // attach-time switching, so here we simply don't let Wi-Fi race in behind a real cable.
         if (accessoryConnected() && isUsbOverride(this)) return
+        val prefs = getSharedPreferences("pillion.settings", Context.MODE_PRIVATE)
+        val port = try {
+            prefs.getInt("tcp_port", 12345)
+        } catch (_: Throwable) {
+            12345
+        }
+        // Tri-state opt-in (the persisted store IS the Start-time choice — App writes it on Start):
+        // blank = USB-only, literal host = direct dial, "auto" = explicit gateway+sweep scan.
+        val configuredHost = try {
+            prefs.getString("tcp_host", "") ?: ""
+        } catch (_: Throwable) {
+            ""
+        }
+        val autoScan = configuredHost.equals("auto", ignoreCase = true)
+        if (!autoScan && configuredHost.isNotBlank()) {
+            // Literal IP/hostname: probe ONLY that host — no gateway probe, no /24 sweep.
+            Logger.d("sdl: Wi-Fi up — dialling configured host $configuredHost:$port directly")
+            Thread {
+                if (!probeTcp(configuredHost, port, 2500)) {
+                    Logger.d("sdl: configured SDL host $configuredHost does not answer on port $port — staying armed")
+                    return@Thread
+                }
+                Handler(Looper.getMainLooper()).post {
+                    if (stopping || isUserStopped(this) || sdlManager != null) return@post
+                    Logger.d("sdl: ==== configured SDL host $configuredHost:$port answers — building session (USB-style) ====")
+                    retryCount = 0
+                    buildAndStart(lastAppId ?: APP_ID_GARMIN, configuredHost, port)
+                }
+            }.start()
+            return
+        }
+        if (!autoScan) {
+            Logger.d("transport: USB-only (blank host) — join scan skipped")
+            return
+        }
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val lp = network?.let { cm.getLinkProperties(it) } ?: return
         // Hotspot truth: the DHCP *server* is the hotspot host = the bike (also serving SDL).
@@ -291,11 +327,6 @@ class SdlService : Service() {
             ?: lp.routes.firstOrNull { it.gateway != null }?.gateway
             ?: return
         val prefix = linkPrefix(lp) ?: return
-        val port = try {
-            getSharedPreferences("pillion.settings", Context.MODE_PRIVATE).getInt("tcp_port", 12345)
-        } catch (_: Throwable) {
-            12345
-        }
         Logger.d("sdl: Wi-Fi up via $prefix.0 gateway $gateway — probing SDL port $port")
         Thread {
             val host = discoverSdlHost(gateway, prefix, port)

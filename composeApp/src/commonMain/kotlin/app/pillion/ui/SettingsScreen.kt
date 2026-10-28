@@ -207,7 +207,7 @@ internal fun SettingsScreen(
                 value = tcpHost,
                 onValueChange = onTcpHost,
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Bike IP — blank = auto (USB / hotspot)") },
+                placeholder = { Text("Bike IP — blank = USB only") },
                 singleLine = true,
             )
             Spacer(Modifier.height(8.dp))

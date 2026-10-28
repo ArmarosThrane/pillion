@@ -138,12 +138,11 @@ fun App(
                             quality = quality,
                             maxFps = maxFps,
                             dashResolution = dashResolution,
-                            // Blank IP = automatic transport, USB-style: the service arms and then
-                            // auto-connects over whatever appears — a USB attach or a Wi-Fi network
-                            // (bike hotspot) whose SDL port answers. Typed IP forces a fixed host;
-                            // the legacy literal "auto" is treated as blank.
-                            tcpHost = tcpHost.trim()
-                                .takeIf { it.isNotEmpty() && !it.equals("auto", ignoreCase = true) },
+                            // Tri-state transport opt-in: blank = USB-only, the service arms and waits
+                            // for the bike cable — no scan of any kind on a Wi-Fi join. A typed IP /
+                            // hostname connects DIRECT to that host on Wi-Fi join. The literal "auto"
+                            // opts into gateway-first discovery with one /24 sweep per network.
+                            tcpHost = tcpHost.trim().takeIf { it.isNotEmpty() },
                             tcpPort = port,
                         )
                     )
