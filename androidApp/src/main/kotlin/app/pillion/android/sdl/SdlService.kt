@@ -117,6 +117,7 @@ class SdlService : Service() {
             setUserStopped(this, true)
             sdlManager?.dispose()
             sdlManager = null
+            releaseCapture() // user Stop must also give back the MediaProjection + shared VirtualDisplay
             SdlSessionState.state.value = MirrorState.Idle
             stopSelf()
             return START_NOT_STICKY
@@ -218,6 +219,15 @@ class SdlService : Service() {
         } catch (t: Throwable) {
             Logger.e("sdl mirror: failed to acquire MediaProjection", t)
         }
+    }
+
+    /** Give the capture back on every stop path: stop the live MediaProjection (kills the system
+     *  "screen being cast" indicator) and free the process-level shared VirtualDisplay. Idempotent —
+     *  safe when already null or already revoked by the system (its onStop callback no-ops). */
+    private fun releaseCapture() {
+        ProjectionHolder.projection?.let { runCatching { it.stop() } }
+        ProjectionHolder.projection = null
+        ScreenMirrorDisplay.releaseShared()
     }
 
     /** True when a USB accessory (the CCU in accessory mode) is currently open on this device. */
@@ -743,6 +753,7 @@ class SdlService : Service() {
         videoHandler.removeCallbacksAndMessages(null)
         stopWifiWatch()
         releaseWakeLock()
+        releaseCapture() // never leave the "screen being cast" indicator up after the service is gone
         intentionalDispose() // same self-armed-rebuild scrub as the internal disposes
         SdlSessionState.state.value = MirrorState.Idle
         super.onDestroy()
