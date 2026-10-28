@@ -25,7 +25,9 @@ object TcpDiscovery {
         // Gateway first — the dash is almost certainly the hotspot's .1.
         val candidates = ArrayList<String>()
         candidates.add("$b1.$b2.$b3.1")
-        for (i in 1..256) {
+        // 2..254: .255/.256 aren't usable unicast (and .256 would fall through to a DNS lookup);
+        // .1 is already queued above as the gateway probe, so don't dial it twice.
+        for (i in 2..254) {
             if (i != ownLast) candidates.add("$b1.$b2.$b3.$i")
         }
 
