@@ -142,10 +142,8 @@ class SdlService : Service() {
             // Toggle OFF = the healthy TCP session ignores the plug-in (charging / flaky-cable safety).
             if (healthy && tcpLive && isUsbOverride(this)) {
                 Logger.d("sdl: ==== USB attached while TCP live + override ON -> switching session to USB ====")
-                retryHandler.removeCallbacksAndMessages(null)
+                intentionalDispose()
                 retryCount = 0 // a plug-in is a user gesture, not a failure retry
-                sdlManager?.dispose()
-                sdlManager = null
             } else if (healthy || (!sessionFailed && !staleWaiting)) {
                 // Healthy (or freshly pending) session; re-asserting foreground here would churn the
                 // FGS type and (on Android 14+) can stop an active screen capture. Leave it untouched.
@@ -159,10 +157,8 @@ class SdlService : Service() {
                 // "plug in and it keeps retrying" behaviour. The rebuild below uses THIS intent's transport
                 // (auto intent = no tcpHost = USB), so a dead TCP session becomes a USB one.
                 Logger.d("sdl: ==== auto-start on dead session -> disposing for rebuild ====")
-                retryHandler.removeCallbacksAndMessages(null)
+                intentionalDispose()
                 retryCount = 0
-                sdlManager?.dispose()
-                sdlManager = null
             }
         }
         // Mirror intent is sticky: once the user grants capture, keep streaming even if the router later
@@ -190,8 +186,7 @@ class SdlService : Service() {
         val key = appId + "|" + (tcpHost ?: "mux") + (if (tcpHost != null) ":$tcpPort" else "")
         if (sdlManager != null && key != currentKey) {
             Logger.d("sdl: transport/appId changed -> disposing previous session")
-            sdlManager?.dispose()
-            sdlManager = null
+            intentionalDispose()
         }
         if (sdlManager == null) {
             currentKey = key
@@ -313,10 +308,8 @@ class SdlService : Service() {
         // next onAvailable (which rediscovers) instead of letting the suite reconnect into nothing.
         if (!lastTcpHost.isNullOrEmpty() && sdlManager != null) {
             Logger.d("sdl: Wi-Fi lost — disposing TCP session, waiting for the network to return")
-            retryHandler.removeCallbacksAndMessages(null)
+            intentionalDispose()
             retryCount = 0
-            sdlManager?.dispose()
-            sdlManager = null
         }
     }
 
@@ -458,7 +451,20 @@ class SdlService : Service() {
         }, delay)
     }
 
+    /** Policy-driven dispose (USB switch, dead session, key change, Wi-Fi loss): SdlManager.dispose()
+     *  fires the listener's onDestroy SYNCHRONOUSLY, which self-arms a 20 s rebuild against the very
+     *  session we are intentionally replacing. Dispose is synchronous, so scrubbing the retry queue
+     *  right AFTER it is airtight (video/HMI handlers untouched). */
+    private fun intentionalDispose() {
+        sdlManager?.dispose()
+        sdlManager = null
+        retryHandler.removeCallbacksAndMessages(null)
+    }
+
     private fun buildWithTransport(appId: String, tcpHost: String?, tcpPort: Int) {
+        // A fresh build always wins: cancel any rebuild still pending from the previous session so it
+        // can't stomp this one mid-registration (see intentionalDispose).
+        retryHandler.removeCallbacksAndMessages(null)
         regOk = false
         sessionFailed = false
         // Fresh session = fresh video gate: the old session's VideoStreamManager died with it, so
@@ -737,8 +743,7 @@ class SdlService : Service() {
         videoHandler.removeCallbacksAndMessages(null)
         stopWifiWatch()
         releaseWakeLock()
-        sdlManager?.dispose()
-        sdlManager = null
+        intentionalDispose() // same self-armed-rebuild scrub as the internal disposes
         SdlSessionState.state.value = MirrorState.Idle
         super.onDestroy()
     }
